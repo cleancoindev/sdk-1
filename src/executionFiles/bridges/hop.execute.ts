@@ -33,7 +33,6 @@ export class HopExecutionManager {
     if (!oldCrossProcess || !oldCrossProcess.txHash) {
       if (action.fromToken.address !== constants.AddressZero) {
         // Check Token Approval only if fromToken is not the native token => no approval needed in that case
-        if (!this.shouldContinue) return status
         await checkAllowance(
           signer,
           fromChain,
@@ -42,7 +41,8 @@ export class HopExecutionManager {
           estimate.approvalAddress,
           update,
           status,
-          true
+          true,
+          this.shouldContinue
         )
       }
     }

@@ -36,7 +36,6 @@ export class SwapExecutionManager {
 
     // Approval
     if (action.fromToken.address !== constants.AddressZero) {
-      if (!this.shouldContinue) return status
       await checkAllowance(
         signer,
         fromChain,
@@ -45,7 +44,8 @@ export class SwapExecutionManager {
         estimate.approvalAddress,
         update,
         status,
-        true
+        true,
+        this.shouldContinue
       )
     }
 
