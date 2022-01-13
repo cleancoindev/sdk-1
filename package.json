@@ -55,6 +55,7 @@
     "axios": "^0.24.0",
     "bignumber.js": "^9.0.1",
     "bridge-sdk": "^2.13.0",
+    "eth-rpc-errors": "^4.0.3",
     "ethers": "^5.5.2"
   },
   "devDependencies": {
@@ -78,12 +79,12 @@
     "pino": "^7.5.1",
     "pinst": "^2.1.6",
     "prettier": "^2.4.0",
+    "standard-version": "^9.3.2",
     "ts-jest": "^27.0.5",
     "ts-loader": "^9.2.5",
     "typescript": "^4.4.3",
     "webpack": "^5.52.1",
-    "webpack-cli": "^4.8.0",
-    "standard-version": "^9.3.2"
+    "webpack-cli": "^4.8.0"
   },
   "directories": {
     "test": "test"
