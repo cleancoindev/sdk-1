@@ -1,6 +1,12 @@
-import { NxtpSdkEvents } from '@connext/nxtp-sdk'
+import {
+  HistoricalTransaction,
+  NxtpSdk,
+  NxtpSdkBase,
+  NxtpSdkEvents,
+  ReceiverTransactionPreparedPayload,
+} from '@connext/nxtp-sdk'
 import { TransactionResponse } from '@ethersproject/abstract-provider'
-import { constants, ethers, utils } from 'ethers'
+import { constants, ethers, utils, Signer } from 'ethers'
 
 import Lifi from '../../Lifi'
 import {
@@ -10,6 +16,10 @@ import {
   getChainById,
   isLifiStep,
   isSwapStep,
+  Process,
+  Chain,
+  Step,
+  Action,
 } from '../../types'
 import { personalizeStep } from '../../utils'
 import { getRpcProvider, getRpcUrls } from '../../connectors'
@@ -19,6 +29,8 @@ import { getDeployedTransactionManagerContract } from '@connext/nxtp-sdk/dist/tr
 import { signFulfillTransactionPayload } from '@connext/nxtp-sdk/dist/utils'
 import { balanceCheck } from '../balanceCheck.execute'
 import { parseWalletError } from '../../utils/parseError'
+import StatusManager from '../../StatusManager'
+import { LifiErrorCodes, RPCError } from '../../utils/errors'
 
 export class NXTPExecutionManager {
   shouldContinue = true
@@ -185,71 +197,39 @@ export class NXTPExecutionManager {
     })
 
     // init sdk
-    const crossableChains = [ChainId.ETH, action.fromChainId, action.toChainId]
-    const chainProviders = getRpcUrls(crossableChains)
-    const { sdk: nxtpSDK, sdkBase: nxtpBaseSDK } = await nxtp.setup(
+    const { sdk: nxtpSDK, sdkBase: nxtpBaseSDK } = await this.initNxtpSdk(
       signer,
-      chainProviders
+      action
     )
 
-    const preparedTransactionPromise = nxtpSDK.waitFor(
-      NxtpSdkEvents.ReceiverTransactionPrepared,
-      10 * 60 * 1000, // = 10 minutes
-      (data) => data.txData.transactionId === transactionId
-    )
+    const transactionPreparedPromise =
+      this.createWaitForReceiverTransactionPreparedPromise(
+        nxtpSDK,
+        nxtpBaseSDK,
+        transactionId
+      ).catch((e) => {
+        statusManager.updateProcess(step, claimProcess.id, 'FAILED', {
+          errorMessage: e.message,
+          errorCode: e.code,
+        })
+        statusManager.updateExecution(step, 'FAILED')
+        throw e
+      })
 
-    // find current status
-    const transactions = await nxtpBaseSDK
-      .getActiveTransactions()
-      .catch(() => [])
-    const foundTransaction = transactions.find(
-      (transfer) =>
-        transfer.crosschainTx.invariant.transactionId === transactionId
+    // while we wait for the ReceiverTransactionPrepared event, we already check if we are done and could abort here
+    const historicalTransaction = await this.searchHistoricalTransaction(
+      nxtpBaseSDK,
+      transactionId
     )
-
-    // check if already done?
-    if (!foundTransaction) {
-      const historicalTransactions = await nxtpBaseSDK
-        .getHistoricalTransactions()
-        .catch(() => [])
-      const foundTransaction = historicalTransactions.find(
-        (transfer) =>
-          transfer.crosschainTx.invariant.transactionId === transactionId
+    if (historicalTransaction) {
+      return this.handleFoundTransaction(
+        nxtpSDK,
+        statusManager,
+        historicalTransaction,
+        step,
+        claimProcess,
+        toChain
       )
-
-      if (foundTransaction) {
-        switch (foundTransaction.status) {
-          case 'CANCELLED':
-            statusManager.updateProcess(step, claimProcess.id, 'CANCELLED')
-            break
-          case 'FULFILLED':
-            statusManager.updateProcess(step, claimProcess.id, 'DONE', {
-              message: 'Funds received: ',
-              txHash: foundTransaction.fulfilledTxHash,
-              txLink:
-                toChain.metamask.blockExplorerUrls[0] +
-                'tx/' +
-                foundTransaction.fulfilledTxHash,
-            })
-
-            statusManager.updateExecution(step, 'DONE', {
-              fromAmount: estimate.fromAmount,
-              toAmount: estimate.toAmount,
-            })
-
-            break
-
-          default:
-            nxtpSDK.removeAllListeners()
-            throw new Error(
-              `Transaction with unknow state ${foundTransaction.status}`
-            )
-        }
-
-        // DONE
-        nxtpSDK.removeAllListeners()
-        return step.execution
-      }
     }
 
     // STEP 6: Wait for signature //////////////////////////////////////////////////////////
@@ -315,16 +295,16 @@ export class NXTPExecutionManager {
       message: 'Wait for bridge (1-5 min)',
     })
 
-    let preparedTransaction
-    try {
-      preparedTransaction = await preparedTransactionPromise
-    } catch (e: any) {
-      statusManager.updateProcess(step, claimProcess.id, 'FAILED', {
-        errorMessage: e.message,
-      })
-      statusManager.updateExecution(step, 'FAILED')
-      nxtpSDK.removeAllListeners()
-      throw e
+    const preparedTransaction = await transactionPreparedPromise // exceptions need to be caught earlier since they might be thrown before await is called here
+    if (this.isHistoricalTransaction(preparedTransaction)) {
+      return this.handleFoundTransaction(
+        nxtpSDK,
+        statusManager,
+        preparedTransaction,
+        step,
+        claimProcess,
+        toChain
+      )
     }
 
     // STEP 8: Decrypt CallData //////////////////////////////////////////////////////////
@@ -442,5 +422,128 @@ export class NXTPExecutionManager {
     // DONE
     nxtpSDK.removeAllListeners()
     return step.execution
+  }
+
+  private initNxtpSdk = (signer: Signer, action: Action) => {
+    const crossableChains = [ChainId.ETH, action.fromChainId, action.toChainId]
+    const chainProviders = getRpcUrls(crossableChains)
+    return nxtp.setup(signer, chainProviders)
+  }
+
+  private searchHistoricalTransaction = async (
+    nxtpBaseSDK: NxtpSdkBase,
+    transactionId: string
+  ): Promise<HistoricalTransaction | undefined> => {
+    // check active transactions. this is more efficient than querying historical transactions. If there is an active one we don't have to query the historical ones yet
+    const transactions = await nxtpBaseSDK
+      .getActiveTransactions()
+      .catch(() => [])
+    const activeTransaction = transactions.find(
+      (transfer) =>
+        transfer.crosschainTx.invariant.transactionId === transactionId
+    )
+
+    if (!activeTransaction) {
+      // check if already done?
+      const historicalTransactions = await nxtpBaseSDK
+        .getHistoricalTransactions()
+        .catch(() => [])
+      const historicTransaction = historicalTransactions.find(
+        (transfer) =>
+          transfer.crosschainTx.invariant.transactionId === transactionId
+      )
+
+      return historicTransaction
+    }
+  }
+
+  private handleFoundTransaction = (
+    nxtpSDK: NxtpSdk,
+    statusManager: StatusManager,
+    transaction: HistoricalTransaction,
+    step: Step,
+    process: Process,
+    toChain: Chain
+  ): Execution => {
+    switch (transaction.status) {
+      case 'CANCELLED':
+        statusManager.updateProcess(step, process.id, 'CANCELLED')
+        break
+      case 'FULFILLED':
+        statusManager.updateProcess(step, process.id, 'DONE', {
+          message: 'Funds received: ',
+          txHash: transaction.fulfilledTxHash,
+          txLink:
+            toChain.metamask.blockExplorerUrls[0] +
+            'tx/' +
+            transaction.fulfilledTxHash,
+        })
+
+        statusManager.updateExecution(step, 'DONE', {
+          fromAmount: step.estimate.fromAmount,
+          toAmount: step.estimate.toAmount,
+        })
+
+        break
+
+      default:
+        debugger
+        nxtpSDK.removeAllListeners()
+        throw new Error(`Transaction with unknown state ${transaction.status}`)
+    }
+
+    nxtpSDK.removeAllListeners()
+    return step.execution!
+  }
+
+  private isHistoricalTransaction = (
+    transaction: any
+  ): transaction is HistoricalTransaction => transaction.status
+
+  private createWaitForReceiverTransactionPreparedPromise = (
+    nxtpSDK: NxtpSdk,
+    nxtpBaseSDK: NxtpSdkBase,
+    transactionId: string
+  ): Promise<ReceiverTransactionPreparedPayload | HistoricalTransaction> => {
+    const retryWrapper = (
+      retryCounter = 0
+    ): Promise<ReceiverTransactionPreparedPayload | HistoricalTransaction> =>
+      nxtpSDK
+        .waitFor(
+          NxtpSdkEvents.ReceiverTransactionPrepared,
+          10 * 60 * 1000, // = 10 minutes
+          (data) => data.txData.transactionId === transactionId
+        )
+        .catch(async (e: any) => {
+          if (e.message.includes('Evt timeout')) {
+            console.debug('NXTP timed out')
+
+            // maybe we are already done? Search for the transaction!
+            const foundTransaction = await this.searchHistoricalTransaction(
+              nxtpBaseSDK,
+              transactionId
+            )
+
+            if (foundTransaction) {
+              // we cannot handle the transaction here due to the function scope, need to exit the function and let the callee deal with it
+              return foundTransaction
+            }
+
+            if (retryCounter < 3) {
+              console.debug('Retrying wait for ReceiverTransactionPrepared')
+              return retryWrapper(retryCounter + 1)
+            } else {
+              throw new RPCError(
+                LifiErrorCodes.timeout,
+                'NXTP receiver transaction timed out',
+                e.stack
+              )
+            }
+          } else {
+            throw parseWalletError(e)
+          }
+        })
+
+    return retryWrapper()
   }
 }
