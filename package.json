@@ -48,7 +48,7 @@
   },
   "dependencies": {
     "@connext/nxtp-sdk": "^0.1.8",
-    "@ethersproject/abi": "^5.5.0",
+    "@ethersproject/abi": "^5.6.1",
     "@ethersproject/contracts": "^5.4.0",
     "@hop-protocol/sdk": "^0.0.1-beta.282",
     "@lifinance/types": "0.9.4",
