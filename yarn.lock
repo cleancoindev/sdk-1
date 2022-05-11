@@ -1383,10 +1383,10 @@
   resolved "https://registry.yarnpkg.com/@ledgerhq/logs/-/logs-5.50.0.tgz#29c6419e8379d496ab6d0426eadf3c4d100cd186"
   integrity sha512-swKHYCOZUGyVt4ge0u8a7AwNcA//h4nx5wIi0sruGye1IJ5Cva0GyK9L2/WdX+kWVTKp92ZiEo1df31lrWGPgA==
 
-"@lifinance/types@0.9.4":
-  version "0.9.4"
-  resolved "https://registry.yarnpkg.com/@lifinance/types/-/types-0.9.4.tgz#ec403337791a998c605da9a709dbd9b2248a63a8"
-  integrity sha512-mXIcELeMeqM4CrExqutWYcpCP+pAMpaAMmUYIHnkWnS3AVwMzLxAwCNcgRHbnjbwubrNJ2Abe5HyWu9dB+3XNQ==
+"@lifinance/types@0.12.0":
+  version "0.12.0"
+  resolved "https://registry.yarnpkg.com/@lifinance/types/-/types-0.12.0.tgz#e628f19b4bfa34e2ccc60bd7225c43a6b67acd13"
+  integrity sha512-9n6aDMoX5XBrvz20CAjNFcfGWOu1oc+BHucnv6kgkQyghX0Kga3KEYKrsaBAzFGbp7D0CpS+pl7B/vUGvzE50w==
   dependencies:
     ethers "^5.4.7"
 
